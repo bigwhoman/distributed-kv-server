@@ -17,7 +17,6 @@
 // You should have received a copy of the GNU General Public License
 // along with this file.  If not, see <http://www.gnu.org/licenses/>.
 
-
 // The key-value server implementation
 
 #include <assert.h>
@@ -31,13 +30,12 @@
 #include <time.h>
 #include <unistd.h>
 
-#include <sys/types.h>
 #include <sys/socket.h>
+#include <sys/types.h>
 
 #include "defs.h"
 #include "hash.h"
 #include "util.h"
-
 
 // Program arguments
 
@@ -48,7 +46,7 @@ static uint16_t coord_port = 0;
 // Ports for listening to incoming connections from clients, servers and coord
 static uint16_t clients_port = 0;
 static uint16_t servers_port = 0;
-static uint16_t coord_in_port = 0; 
+static uint16_t coord_in_port = 0;
 
 // Current server id and total number of servers
 static int server_id = -1;
@@ -57,60 +55,57 @@ static int num_servers = 0;
 // Log file name
 static char log_file_name[PATH_MAX] = "";
 
-
-static void usage(char **argv)
-{
-	printf("usage: %s -h <coord host> -m <coord port> -c <clients port> "
-	       "-s <servers port> -M <coord incoming port> -S <server id> "
-	       "-n <num servers> [-l <log file>]\n", argv[0]);
-	printf("If the log file (-l) is not specified, log output is written "
-	       "to stdout\n");
+static void usage(char **argv) {
+  printf("usage: %s -h <coord host> -m <coord port> -c <clients port> "
+         "-s <servers port> -M <coord incoming port> -S <server id> "
+         "-n <num servers> [-l <log file>]\n",
+         argv[0]);
+  printf("If the log file (-l) is not specified, log output is written "
+         "to stdout\n");
 }
 
 // Returns false if the arguments are invalid
-static bool parse_args(int argc, char **argv)
-{
-	char option;
-	while ((option = getopt(argc, argv, "h:m:c:s:M:S:n:l:")) != -1) {
-		switch(option) {
-		case 'h':
-			strncpy(coord_host_name, optarg, HOST_NAME_MAX);
-			break;
-		case 'm':
-			coord_port  = atoi(optarg);
-			break;
-		case 'c':
-			clients_port  = atoi(optarg);
-			break;
-		case 's':
-			servers_port  = atoi(optarg);
-			break;
-		case 'M':
-			coord_in_port = atoi(optarg);
-			break;
-		case 'S':
-			server_id     = atoi(optarg);
-			break;
-		case 'n':
-			num_servers   = atoi(optarg);
-			break;
-		case 'l':
-			strncpy(log_file_name, optarg, PATH_MAX);
-			break;
-		default:
-			fprintf(stderr, "Invalid option: -%c\n", option);
-			return false;
-		}
-	}
+static bool parse_args(int argc, char **argv) {
+  char option;
+  while ((option = getopt(argc, argv, "h:m:c:s:M:S:n:l:")) != -1) {
+    switch (option) {
+    case 'h':
+      strncpy(coord_host_name, optarg, HOST_NAME_MAX);
+      break;
+    case 'm':
+      coord_port = atoi(optarg);
+      break;
+    case 'c':
+      clients_port = atoi(optarg);
+      break;
+    case 's':
+      servers_port = atoi(optarg);
+      break;
+    case 'M':
+      coord_in_port = atoi(optarg);
+      break;
+    case 'S':
+      server_id = atoi(optarg);
+      break;
+    case 'n':
+      num_servers = atoi(optarg);
+      break;
+    case 'l':
+      strncpy(log_file_name, optarg, PATH_MAX);
+      break;
+    default:
+      fprintf(stderr, "Invalid option: -%c\n", option);
+      return false;
+    }
+  }
 
-	// Allow server to choose own ports. Uncomment extra conditions if
-	// server ports must be specified on command line.
-	return (coord_host_name[0] != '\0') && (coord_port != 0) &&
-		//(clients_port != 0) && (servers_port != 0) &&
-		//(coord_in_port != 0) &&
-		(num_servers >= 3) && (server_id >= 0) && (server_id < num_servers);
+  // Allow server to choose own ports. Uncomment extra conditions if
+  // server ports must be specified on command line.
+  return (coord_host_name[0] != '\0') && (coord_port != 0) &&
+         //(clients_port != 0) && (servers_port != 0) &&
+         //(coord_in_port != 0) &&
+         (num_servers >= 3) && (server_id >= 0) && (server_id < num_servers);
 }
-
 
 // Socket for sending requests to the coordinator
 static int coord_fd_out = -1;
@@ -128,11 +123,13 @@ static int client_fd_table[MAX_CLIENT_SESSIONS];
 
 // Store fds for connected servers
 #define MAX_SERVER_SESSIONS 2
-static int server_fd_table[MAX_SERVER_SESSIONS] = { -1, -1 };
-
+static int server_fd_table[MAX_SERVER_SESSIONS] = {-1, -1};
 
 // Storage for this server's primary key set
 hash_table primary_hash = {0};
+
+// Storage for this server's secondary key set
+hash_table secondary_hash = {0};
 
 // Primary server (the one that stores the primary copy for this server's
 // secondary key set)
@@ -144,505 +141,685 @@ static int primary_fd = -1;
 static int secondary_sid = -1;
 static int secondary_fd = -1;
 
-
 static void cleanup();
 
 static const int hash_size = 65536;
 
 // Initialize and start the server
-static bool init_server()
-{
-	for (int i = 0; i < MAX_CLIENT_SESSIONS; i++) {
-		client_fd_table[i] = -1;
-	}
+static bool init_server() {
+  for (int i = 0; i < MAX_CLIENT_SESSIONS; i++) {
+    client_fd_table[i] = -1;
+  }
 
-	// Get the host name that server is running on
-	char my_host_name[HOST_NAME_MAX] = "";
-	char timebuf[TIME_STR_SIZE];
+  // Get the host name that server is running on
+  char my_host_name[HOST_NAME_MAX] = "";
+  char timebuf[TIME_STR_SIZE];
 
-	if (get_local_host_name(my_host_name, sizeof(my_host_name)) < 0) {
-		return false;
-	}
-	log_write("%s Server starts on host: %s\n",
-		  current_time_str(timebuf, TIME_STR_SIZE), my_host_name);
+  if (get_local_host_name(my_host_name, sizeof(my_host_name)) < 0) {
+    return false;
+  }
+  log_write("%s Server starts on host: %s\n",
+            current_time_str(timebuf, TIME_STR_SIZE), my_host_name);
 
-	// Create sockets for incoming connections from clients and other servers
-	uint16_t newport = 0;
-	my_clients_fd  = create_server(clients_port, MAX_CLIENT_SESSIONS, &newport);
-	if (my_clients_fd < 0)  {
-		goto cleanup;
-	}
-	if (newport != 0) {
-		clients_port = newport;
-		newport = 0;
-	}
+  // Create sockets for incoming connections from clients and other servers
+  uint16_t newport = 0;
+  my_clients_fd = create_server(clients_port, MAX_CLIENT_SESSIONS, &newport);
+  if (my_clients_fd < 0) {
+    goto cleanup;
+  }
+  if (newport != 0) {
+    clients_port = newport;
+    newport = 0;
+  }
 
-	my_servers_fd  = create_server(servers_port, MAX_SERVER_SESSIONS, &newport);
-	if (my_servers_fd < 0) {
-		goto cleanup;
-	}
-	if (newport != 0) {
-		servers_port = newport;
-		newport = 0;
-	}
-	
-	my_coord_fd = create_server(coord_in_port, 1, &newport);
-	if (my_coord_fd < 0) {
-		goto cleanup;
-	}
-	if (newport != 0) {
-		coord_in_port = newport;
-		newport = 0;
-	}
+  my_servers_fd = create_server(servers_port, MAX_SERVER_SESSIONS, &newport);
+  if (my_servers_fd < 0) {
+    goto cleanup;
+  }
+  if (newport != 0) {
+    servers_port = newport;
+    newport = 0;
+  }
 
-	// Determine the ids of replica servers
-	primary_sid = primary_server_id(server_id, num_servers);
-	secondary_sid = secondary_server_id(server_id, num_servers);
+  my_coord_fd = create_server(coord_in_port, 1, &newport);
+  if (my_coord_fd < 0) {
+    goto cleanup;
+  }
+  if (newport != 0) {
+    coord_in_port = newport;
+    newport = 0;
+  }
 
-	// Initialize key-value storage
-	if (!hash_init(&primary_hash, hash_size)) {
-		goto cleanup;
-	}
+  // Determine the ids of replica servers
+  primary_sid = primary_server_id(server_id, num_servers);
+  secondary_sid = secondary_server_id(server_id, num_servers);
 
-	// Connect to coordinator to "register" that we are live
-	if ((coord_fd_out = connect_to_server(coord_host_name, coord_port)) < 0) {
-		goto cleanup;
-	}
-	// Tell coordinator about the port numbers we are using
-	char send_buffer[MAX_MSG_LEN] = {0};
-	coord_ctrl_request *req = (coord_ctrl_request*)send_buffer;
-	req->hdr.type = MSG_COORD_CTRL_REQ;
-	req->type = STARTED;
-	req->server_id = server_id;
-	req->ports[0] = clients_port;
-	req->ports[1] = servers_port;
-	req->ports[2] = coord_in_port;
+  // Initialize key-value storage
+  if (!hash_init(&primary_hash, hash_size) ||
+      !hash_init(&secondary_hash, hash_size)) {
+    goto cleanup;
+  }
 
-	if (!send_msg(coord_fd_out, req, sizeof(*req) + 3*sizeof(uint16_t))) {
-		goto cleanup;
-	}
+  // Connect to coordinator to "register" that we are live
+  if ((coord_fd_out = connect_to_server(coord_host_name, coord_port)) < 0) {
+    goto cleanup;
+  }
+  // Tell coordinator about the port numbers we are using
+  char send_buffer[MAX_MSG_LEN] = {0};
+  coord_ctrl_request *req = (coord_ctrl_request *)send_buffer;
+  req->hdr.type = MSG_COORD_CTRL_REQ;
+  req->type = STARTED;
+  req->server_id = server_id;
+  req->ports[0] = clients_port;
+  req->ports[1] = servers_port;
+  req->ports[2] = coord_in_port;
 
+  if (!send_msg(coord_fd_out, req, sizeof(*req) + 3 * sizeof(uint16_t))) {
+    goto cleanup;
+  }
 
+  // TODO: Create a separate thread that takes care of sending periodic
+  // heartbeat messages
+  // ...
 
-	// TODO: Create a separate thread that takes care of sending periodic heartbeat messages
-	// ...
-
-	log_write("Server initialized\n");
-	return true;
+  log_write("Server initialized\n");
+  return true;
 
 cleanup:
-	log_write("Server initialization failed.\n");
-	cleanup();
-	return false;
+  log_write("Server initialization failed.\n");
+  cleanup();
+  return false;
 }
 
-// Hash iterator for freeing memory used by values; called during storage cleanup
-static void clean_iterator_f(const char key[KEY_SIZE], void *value, size_t value_sz, void *arg)
-{
-	(void)key;
-	(void)value_sz;
-	(void)arg;
+// Hash iterator for freeing memory used by values; called during storage
+// cleanup
+static void clean_iterator_f(const char key[KEY_SIZE], void *value,
+                             size_t value_sz, void *arg) {
+  (void)key;
+  (void)value_sz;
+  (void)arg;
 
-	assert(value != NULL);
-	free(value);
+  assert(value != NULL);
+  free(value);
 }
 
 // Cleanup and release all the resources
-static void cleanup()
-{
-	log_write("Cleaning up and exiting ...\n");
+static void cleanup() {
+  log_write("Cleaning up and exiting ...\n");
 
-	close_safe(&coord_fd_out);
-	close_safe(&coord_fd_in);
-	close_safe(&my_clients_fd);
-	close_safe(&my_servers_fd);
-	close_safe(&my_coord_fd);
-	close_safe(&secondary_fd);
-	close_safe(&primary_fd);
+  close_safe(&coord_fd_out);
+  close_safe(&coord_fd_in);
+  close_safe(&my_clients_fd);
+  close_safe(&my_servers_fd);
+  close_safe(&my_coord_fd);
+  close_safe(&secondary_fd);
+  close_safe(&primary_fd);
 
-	for (int i = 0; i < MAX_CLIENT_SESSIONS; i++) {
-		close_safe(&(client_fd_table[i]));
-	}
-	for (int i = 0; i < MAX_SERVER_SESSIONS; i++) {
-		close_safe(&(server_fd_table[i]));
-	}
+  for (int i = 0; i < MAX_CLIENT_SESSIONS; i++) {
+    close_safe(&(client_fd_table[i]));
+  }
+  for (int i = 0; i < MAX_SERVER_SESSIONS; i++) {
+    close_safe(&(server_fd_table[i]));
+  }
 
-	hash_iterate(&primary_hash, clean_iterator_f, NULL);
-	hash_cleanup(&primary_hash);
+  hash_iterate(&primary_hash, clean_iterator_f, NULL);
+  hash_cleanup(&primary_hash);
 
-	// TODO: release all other resources
-	// ...
+  hash_iterate(&secondary_hash, clean_iterator_f, NULL);
+  hash_cleanup(&secondary_hash);
 
+  // TODO: release all other resources
+  // ...
 }
-
 
 // Connection will be closed after calling this function regardless of result
-static void process_client_message(int fd)
-{
-	char timebuf[TIME_STR_SIZE];
+static void process_client_message(int fd) {
+  char timebuf[TIME_STR_SIZE];
 
-	log_write("%s Receiving a client message\n",
-		  current_time_str(timebuf, TIME_STR_SIZE));
+  log_write("%s Receiving a client message\n",
+            current_time_str(timebuf, TIME_STR_SIZE));
 
-	// Read and parse the message
-	char req_buffer[MAX_MSG_LEN] = {0};
-	if (!recv_msg(fd, req_buffer, MAX_MSG_LEN, MSG_OPERATION_REQ)) {
-		return;
-	}
-	operation_request *request = (operation_request*)req_buffer;
+  // Read and parse the message
+  char req_buffer[MAX_MSG_LEN] = {0};
+  if (!recv_msg(fd, req_buffer, MAX_MSG_LEN, MSG_OPERATION_REQ)) {
+    return;
+  }
+  operation_request *request = (operation_request *)req_buffer;
 
-	// Initialize the response
-	char resp_buffer[MAX_MSG_LEN] = {0};
-	operation_response *response = (operation_response*)resp_buffer;
-	response->hdr.type = MSG_OPERATION_RESP;
-	uint16_t value_sz = 0;
+  // Initialize the response
+  char resp_buffer[MAX_MSG_LEN] = {0};
+  operation_response *response = (operation_response *)resp_buffer;
+  response->hdr.type = MSG_OPERATION_RESP;
+  uint16_t value_sz = 0;
 
-	// TODO: extend this function to support replication
-	// Make sure to implement all necessary synchronization.
-	// Feel free to use the lock/unlock functions from hash.h.
-	// ...
+  // TODO: extend this function to support replication
+  // Make sure to implement all necessary synchronization.
+  // Feel free to use the lock/unlock functions from hash.h.
+  // ...
 
-	// Check that requested key is valid.
-	// A server should only respond to requests for which it holds the
-	// primary replica. For debugging and testing, however, we also want
-	// to allow the secondary server to respond to OP_VERIFY requests,
-	// to confirm that replication has succeeded. To check this, we need
-	// to know the primary server id for which this server is the secondary.
-	int key_srv_id = key_server_id(request->key, num_servers);
-	if ((key_srv_id != server_id) &&
-	    ((key_srv_id != primary_sid) || (request->type != OP_VERIFY))) {
-		log_error("sid %d: Invalid client key %s sid %d\n", server_id, key_to_str(request->key), key_srv_id);
-		// This can happen if client is using old config during recovery
-		response->status = INVALID_REQUEST;
-		send_msg(fd, response, sizeof(*response) + value_sz);
-		return;
-	}
+  // Check that requested key is valid.
+  // A server should only respond to requests for which it holds the
+  // primary replica. For debugging and testing, however, we also want
+  // to allow the secondary server to respond to OP_VERIFY requests,
+  // to confirm that replication has succeeded. To check this, we need
+  // to know the primary server id for which this server is the secondary.
+  int key_srv_id = key_server_id(request->key, num_servers);
+  if ((key_srv_id != server_id) &&
+      ((key_srv_id != primary_sid) || (request->type != OP_VERIFY))) {
+    log_error("sid %d: Invalid client key %s sid %d\n", server_id,
+              key_to_str(request->key), key_srv_id);
+    // This can happen if client is using old config during recovery
+    response->status = INVALID_REQUEST;
+    send_msg(fd, response, sizeof(*response) + value_sz);
+    return;
+  }
 
-	// Process the request based on its type
-	switch (request->type) {
-		case OP_NOOP:
-			response->status = SUCCESS;
-			break;
+  // Process the request based on its type
+  switch (request->type) {
+  case OP_NOOP:
+    response->status = SUCCESS;
+    break;
 
-		case OP_GET: {
-			void *data = NULL;
-			size_t size = 0;
+  case OP_VERIFY: {
+    void *data = NULL;
+    size_t size = 0;
+    size_t value_size = request->hdr.length - sizeof(*request);
+    void *value_copy = malloc(value_size);
+    int key_srv_id = key_server_id(request->key, num_servers);
 
-			assert(key_srv_id == server_id);
-			// Get the value for requested key from the hash table
-			if (!hash_get(&primary_hash, request->key, &data, &size)) {
-				log_write("Key %s not found\n", key_to_str(request->key));
-				response->status = KEY_NOT_FOUND;
-				break;
-			}
+    assert(key_srv_id == primary_sid);
+    // Get the value for requested key from the hash table
+    if (!hash_get(&secondary_hash, request->key, &data, &size)) {
+      log_write("Key %s not found\n", key_to_str(request->key));
+      response->status = KEY_NOT_FOUND;
+      break;
+    }
 
-			// Copy the stored value into the response buffer
-			memcpy(response->value, data, size);
-			value_sz = size;
+    // Copy the stored value into the response buffer
+    memcpy(response->value, data, size);
+    value_sz = size;
 
-			response->status = SUCCESS;
-			break;
-		}
+    // Verify the secondary server
+    char replica_send_buffer[MAX_MSG_LEN] = {0};
+    operation_request *replica_request =
+        (operation_request *)replica_send_buffer;
+    replica_request->hdr.type = MSG_OPERATION_REQ;
+    replica_request->type = OP_PUT;
+    memcpy(replica_request->key, request->key, KEY_SIZE);
 
-		case OP_PUT: {
-			// Need to copy the value to dynamically allocated memory
-			size_t value_size = request->hdr.length - sizeof(*request);
-			void *value_copy = malloc(value_size);
+    // Need to copy the value, only for PUT operations
+    int value_sz = 0;
+    value_sz = strlen(request->value) + 1;
+    strncpy(replica_request->value, request->value, value_sz);
 
-			assert(key_srv_id == server_id);
+    char recv_buffer[MAX_MSG_LEN] = {0};
+    if (!send_msg(secondary_fd, request, sizeof(*replica_request) + value_sz) ||
+        !recv_msg(secondary_fd, recv_buffer, sizeof(recv_buffer),
+                  MSG_OPERATION_RESP)) {
+      response->status = SERVER_FAILURE;
+    }
 
-			if (value_copy == NULL) {
-				log_perror("malloc");
-				log_error("sid %d: Out of memory\n", server_id);
-				response->status = OUT_OF_SPACE;
-				break;
-			}
-			memcpy(value_copy, request->value, value_size);
+    response->status = SUCCESS;
+    break;
+  }
 
-			void *old_value = NULL;
-			size_t old_value_sz = 0;
+  case OP_GET: {
+    void *data = NULL;
+    size_t size = 0;
 
-			// Put the <key, value> pair into the hash table
-			if (!hash_put(&primary_hash, request->key, value_copy, value_size, &old_value, &old_value_sz))
-			{
-				log_error("sid %d: Out of memory\n", server_id);
-				free(value_copy);
-				response->status = OUT_OF_SPACE;
-				break;
-			}
+    assert(key_srv_id == server_id);
+    // Get the value for requested key from the hash table
+    if (!hash_get(&primary_hash, request->key, &data, &size)) {
+      log_write("Key %s not found\n", key_to_str(request->key));
+      response->status = KEY_NOT_FOUND;
+      break;
+    }
 
-			// TODO: forward the PUT request to the secondary replica
-			// ...
+    // Copy the stored value into the response buffer
+    memcpy(response->value, data, size);
+    value_sz = size;
 
-			// Need to free the old value (if there was any)
-			if (old_value != NULL) {
-				free(old_value);
-			}
+    response->status = SUCCESS;
+    break;
+  }
 
-			response->status = SUCCESS;
-			break;
-		}
+  case OP_PUT: {
+    // Need to copy the value to dynamically allocated memory
+    size_t value_size = request->hdr.length - sizeof(*request);
+    void *value_copy = malloc(value_size);
 
-	        case OP_VERIFY: {
-			// Checked for invalid OP_VERIFY earlier. Now just check
-			// if we are primary or secondary for this key.
-			if (key_srv_id == server_id) {
-				// Handle just like a GET request
-				void *data = NULL;
-				size_t size = 0;
+    assert(key_srv_id == server_id);
 
-				// Get the value for key from the primary hash table
-				if (!hash_get(&primary_hash, request->key, &data, &size)) {
-					log_write("Key %s not found\n",
-						  key_to_str(request->key));
-					response->status = KEY_NOT_FOUND;
-				} else {
-					// Copy the value into the response buffer
-					memcpy(response->value, data, size);
-					value_sz = size;
-					response->status = SUCCESS;
-				}
-			} else if (key_srv_id == primary_sid) {
-				//TODO: server should hold secondary replica of key
-				//Process like a GET request, using secondary keys.
-				//...
-				log_write("sid %d: OP_VERIFY not implemented yet.\n",
-					  server_id);
-				response->status = KEY_NOT_FOUND;
-			} else {
-				// Should not be possible if logic for checking
-				// invalid request prior to switch is correct.
-				assert(false);
-			}
-			break;
-		}
-		default:
-			log_error("sid %d: Invalid client operation type\n", server_id);
-			return;
-	}
+    if (value_copy == NULL) {
+      log_perror("malloc");
+      log_error("sid %d: Out of memory\n", server_id);
+      response->status = OUT_OF_SPACE;
+      break;
+    }
+    memcpy(value_copy, request->value, value_size);
 
-	// Send reply to the client
-	send_msg(fd, response, sizeof(*response) + value_sz);
+    void *old_value = NULL;
+    size_t old_value_sz = 0;
+
+    // Put the <key, value> pair into the hash table
+    if (!hash_put(&primary_hash, request->key, value_copy, value_size,
+                  &old_value, &old_value_sz)) {
+      log_error("sid %d: Out of memory\n", server_id);
+      free(value_copy);
+      response->status = OUT_OF_SPACE;
+      break;
+    }
+
+    // TODO: forward the PUT request to the secondary replica
+    // ...
+
+    response->status = SUCCESS;
+
+    char replica_send_buffer[MAX_MSG_LEN] = {0};
+    operation_request *replica_request =
+        (operation_request *)replica_send_buffer;
+    replica_request->hdr.type = MSG_OPERATION_REQ;
+    replica_request->type = OP_PUT;
+    memcpy(replica_request->key, request->key, KEY_SIZE);
+
+    // Need to copy the value, only for PUT operations
+    int value_sz = 0;
+    value_sz = strlen(request->value) + 1;
+    strncpy(replica_request->value, request->value, value_sz);
+
+    char recv_buffer[MAX_MSG_LEN] = {0};
+    if (!send_msg(secondary_fd, request, sizeof(*replica_request) + value_sz) ||
+        !recv_msg(secondary_fd, recv_buffer, sizeof(recv_buffer),
+                  MSG_OPERATION_RESP)) {
+      response->status = SERVER_FAILURE;
+    }
+
+    // Need to free the old value (if there was any)
+    if (old_value != NULL) {
+      free(old_value);
+    }
+
+    break;
+  }
+
+  case OP_VERIFY: {
+    // Checked for invalid OP_VERIFY earlier. Now just check
+    // if we are primary or secondary for this key.
+    if (key_srv_id == server_id) {
+      // Handle just like a GET request
+      void *data = NULL;
+      size_t size = 0;
+
+      // Get the value for key from the primary hash table
+      if (!hash_get(&primary_hash, request->key, &data, &size)) {
+        log_write("Key %s not found\n", key_to_str(request->key));
+        response->status = KEY_NOT_FOUND;
+      } else {
+        // Copy the value into the response buffer
+        memcpy(response->value, data, size);
+        value_sz = size;
+        response->status = SUCCESS;
+      }
+    } else if (key_srv_id == primary_sid) {
+      // TODO: server should hold secondary replica of key
+      // Process like a GET request, using secondary keys.
+      //...
+      log_write("sid %d: OP_VERIFY not implemented yet.\n", server_id);
+      response->status = KEY_NOT_FOUND;
+    } else {
+      // Should not be possible if logic for checking
+      // invalid request prior to switch is correct.
+      assert(false);
+    }
+    break;
+  }
+  default:
+    log_error("sid %d: Invalid client operation type\n", server_id);
+    return;
+  }
+
+  // Send reply to the client
+  send_msg(fd, response, sizeof(*response) + value_sz);
 }
 
+// Returns false if either the message was invalid or if this was the last
+// message (in both cases the connection will be closed)
+static bool process_server_message(int fd) {
+  char timebuf[TIME_STR_SIZE];
 
-// Returns false if either the message was invalid or if this was the last message
-// (in both cases the connection will be closed)
-static bool process_server_message(int fd)
-{
-	char timebuf[TIME_STR_SIZE];
+  log_write("%s Receiving a server message\n",
+            current_time_str(timebuf, TIME_STR_SIZE));
 
-	log_write("%s Receiving a server message\n",
-		  current_time_str(timebuf, TIME_STR_SIZE));
+  // Read and parse the message
+  char req_buffer[MAX_MSG_LEN] = {0};
+  if (!recv_msg(fd, req_buffer, MAX_MSG_LEN, MSG_OPERATION_REQ)) {
+    return false;
+  }
+  operation_request *request = (operation_request *)req_buffer;
+  // Initialize the response
+  char resp_buffer[MAX_MSG_LEN] = {0};
+  operation_response *response = (operation_response *)resp_buffer;
+  response->hdr.type = MSG_OPERATION_RESP;
+  uint16_t value_sz = 0;
 
-	// Read and parse the message
-	char req_buffer[MAX_MSG_LEN] = {0};
-	if (!recv_msg(fd, req_buffer, MAX_MSG_LEN, MSG_OPERATION_REQ)) {
-		return false;
-	}
-	operation_request *request = (operation_request*)req_buffer;
+  // NOOP operation request is used to indicate the last message in an UPDATE
+  // sequence
+  if (request->type == OP_NOOP) {
+    log_write("Received the last server message, closing connection\n");
+    return false;
+  }
 
-	// NOOP operation request is used to indicate the last message in an UPDATE sequence
-	if (request->type == OP_NOOP) {
-		log_write("Received the last server message, closing connection\n");
-		return false;
-	}
+  if (request->type == OP_GET) {
+    void *data = NULL;
+    size_t size = 0;
+    size_t value_size = request->hdr.length - sizeof(*request);
+    void *value_copy = malloc(value_size);
+    int key_srv_id = key_server_id(request->key, num_servers);
 
-	// TODO: process the message and send the response
-	// ...
+    assert(key_srv_id == primary_sid);
+    // Get the value for requested key from the hash table
+    if (!hash_get(&secondary_hash, request->key, &data, &size)) {
+      log_write("Key %s not found\n", key_to_str(request->key));
+      response->status = KEY_NOT_FOUND;
+      return false;
+    }
 
-	return true;
+    // Copy the stored value into the response buffer
+    memcpy(response->value, data, size);
+    value_sz = size;
+
+    // Verify the secondary server
+    char replica_send_buffer[MAX_MSG_LEN] = {0};
+    operation_request *replica_request =
+        (operation_request *)replica_send_buffer;
+    replica_request->hdr.type = MSG_OPERATION_REQ;
+    replica_request->type = OP_PUT;
+    memcpy(replica_request->key, request->key, KEY_SIZE);
+
+    // Need to copy the value, only for PUT operations
+    int value_sz = 0;
+    value_sz = strlen(request->value) + 1;
+    strncpy(replica_request->value, request->value, value_sz);
+
+    char recv_buffer[MAX_MSG_LEN] = {0};
+    if (!send_msg(secondary_fd, request, sizeof(*replica_request) + value_sz) ||
+        !recv_msg(secondary_fd, recv_buffer, sizeof(recv_buffer),
+                  MSG_OPERATION_RESP)) {
+      response->status = SERVER_FAILURE;
+    }
+
+    response->status = SUCCESS;
+    return false;
+  }
+
+  // PUT operation sent by the primary
+  if (request->type == OP_PUT) {
+    // Need to copy the value to dynamically allocated memory
+    size_t value_size = request->hdr.length - sizeof(*request);
+    void *value_copy = malloc(value_size);
+    int key_srv_id = key_server_id(request->key, num_servers);
+    // TODO: key_srv_id checks
+
+    assert(key_srv_id == primary_sid);
+
+    if (value_copy == NULL) {
+      log_perror("malloc");
+      log_error("sid %d: Out of memory\n", server_id);
+      response->status = OUT_OF_SPACE;
+
+      send_msg(fd, response, sizeof(*response) + value_sz);
+      return false;
+    }
+    memcpy(value_copy, request->value, value_size);
+
+    void *old_value = NULL;
+    size_t old_value_sz = 0;
+
+    // Put the <key, value> pair into the hash table
+    if (!hash_put(&secondary_hash, request->key, value_copy, value_size,
+                  &old_value, &old_value_sz)) {
+      log_error("sid %d: Out of memory\n", server_id);
+      free(value_copy);
+      response->status = OUT_OF_SPACE;
+
+      send_msg(fd, response, sizeof(*response) + value_sz);
+      return false;
+    }
+
+    response->status = SUCCESS;
+
+    send_msg(fd, response, sizeof(*response) + value_sz);
+
+    // Need to free the old value (if there was any)
+    if (old_value != NULL) {
+      free(old_value);
+    }
+  }
+
+  // TODO: process the message and send the response
+  // ...
+
+  return true;
 }
 
 // Returns false if the message was invalid (so the connection will be closed)
-// Sets *shutdown_requested to true if received a SHUTDOWN message (so the server will terminate)
-static bool process_coordinator_message(int fd, bool *shutdown_requested)
-{
-	char timebuf[TIME_STR_SIZE];
+// Sets *shutdown_requested to true if received a SHUTDOWN message (so the
+// server will terminate)
+static bool process_coordinator_message(int fd, bool *shutdown_requested) {
+  char timebuf[TIME_STR_SIZE];
 
-	assert(shutdown_requested != NULL);
-	*shutdown_requested = false;
+  assert(shutdown_requested != NULL);
+  *shutdown_requested = false;
 
-	log_write("%s Receiving a coordinator message\n",
-		  current_time_str(timebuf,TIME_STR_SIZE));
+  log_write("%s Receiving a coordinator message\n",
+            current_time_str(timebuf, TIME_STR_SIZE));
 
-	// Read and parse the message
-	char req_buffer[MAX_MSG_LEN] = {0};
-	if (!recv_msg(fd, req_buffer, MAX_MSG_LEN, MSG_SERVER_CTRL_REQ)) {
-		return false;
-	}
-	server_ctrl_request *request = (server_ctrl_request*)req_buffer;
+  // Read and parse the message
+  char req_buffer[MAX_MSG_LEN] = {0};
+  if (!recv_msg(fd, req_buffer, MAX_MSG_LEN, MSG_SERVER_CTRL_REQ)) {
+    return false;
+  }
+  server_ctrl_request *request = (server_ctrl_request *)req_buffer;
 
-	// Initialize the response
-	server_ctrl_response response = {0};
-	response.hdr.type = MSG_SERVER_CTRL_RESP;
-	response.status = SERVER_CTRLREQ_STATUS_MAX; // Detect unset status
-	
-	// Process the request based on its type
-	switch (request->type) {
-	case SET_SECONDARY:
-		if ((secondary_fd = connect_to_server(request->host_name,
-						      request->port)) < 0) {
-			response.status = CTRLREQ_FAILURE;
-		} else {
-			response.status = CTRLREQ_SUCCESS;
-		}
-		break;
+  // Initialize the response
+  server_ctrl_response response = {0};
+  response.hdr.type = MSG_SERVER_CTRL_RESP;
+  response.status = SERVER_CTRLREQ_STATUS_MAX; // Detect unset status
 
-	case UPDATE_PRIMARY:
-		response.status = CTRLREQ_FAILURE; // TODO: handle this message type
-		break;
+  // Process the request based on its type
+  switch (request->type) {
+  case SET_SECONDARY:
+    if ((secondary_fd = connect_to_server(request->host_name, request->port)) <
+        0) {
+      response.status = CTRLREQ_FAILURE;
+    } else {
+      // Tell coordinator about the port numbers we are using
+      response.status = CTRLREQ_SUCCESS;
+    }
+    break;
 
-       case UPDATE_SECONDARY:
-		response.status = CTRLREQ_FAILURE; // TODO: handle this message type
-		break;
+  case UPDATE_PRIMARY:
+    response.status = CTRLREQ_FAILURE; // TODO: handle this message type
+    break;
 
-	case SWITCH_PRIMARY:
-		response.status = CTRLREQ_FAILURE; // TODO: handle this message type
-		break;
+  case UPDATE_SECONDARY:
+    response.status = CTRLREQ_FAILURE; // TODO: handle this message type
+    break;
 
-	case SHUTDOWN:
-		*shutdown_requested = true;
-		return true;
-		
-	case DUMP_PRIMARY:
-		// TODO: write primary keys from hash table to file, overwriting
-		// any previous content in the output file. 
-		// The output file should be named "server_<sid>.primary",
-		// where <sid> is the server id number of this server.
-		// No response is expected, so after dumping keys, just return.
-		return true;
-		
-	case DUMP_SECONDARY:
-		// TODO: write secondary keys from hash table to file, overwriting
-		// any previous content in the output file. 
-		// The output file should be named "server_<sid>.secondary",
-		// where <sid> is the server id number of this server.
-		// No response is expected, so after dumping keys, just return.
-		return true;
-	
-	default:// impossible
-		assert(false);
-		break;
-	}
+  case SWITCH_PRIMARY:
+    response.status = CTRLREQ_FAILURE; // TODO: handle this message type
+    break;
 
-	assert(response.status != SERVER_CTRLREQ_STATUS_MAX);
-	
-	send_msg(fd, &response, sizeof(response));
-	return true;
+  case SHUTDOWN:
+    *shutdown_requested = true;
+    return true;
+
+  case DUMP_PRIMARY:
+    // TODO: write primary keys from hash table to file, overwriting
+    // any previous content in the output file.
+    // The output file should be named "server_<sid>.primary",
+    // where <sid> is the server id number of this server.
+    // No response is expected, so after dumping keys, just return.
+    return true;
+
+  case DUMP_SECONDARY:
+    // TODO: write secondary keys from hash table to file, overwriting
+    // any previous content in the output file.
+    // The output file should be named "server_<sid>.secondary",
+    // where <sid> is the server id number of this server.
+    // No response is expected, so after dumping keys, just return.
+    return true;
+
+  default: // impossible
+    assert(false);
+    break;
+  }
+
+  assert(response.status != SERVER_CTRLREQ_STATUS_MAX);
+
+  send_msg(fd, &response, sizeof(response));
+  return true;
 }
-
 
 // Returns false if stopped due to errors, true if shutdown was requested
-static bool run_server_loop()
-{
-	// Usual preparation stuff for select()
-	fd_set rset, allset;
-	FD_ZERO(&allset);
-	FD_SET(my_clients_fd, &allset);
-	FD_SET(my_coord_fd, &allset);
+static bool run_server_loop() {
+  // Usual preparation stuff for select()
+  fd_set rset, allset;
+  FD_ZERO(&allset);
+  FD_SET(my_clients_fd, &allset);
+  FD_SET(my_coord_fd, &allset);
+  FD_SET(my_servers_fd, &allset);
 
-	int maxfd = max(my_clients_fd, my_coord_fd);
+  int maxfd = max(my_clients_fd, my_coord_fd);
+  maxfd = max(maxfd, my_servers_fd);
 
-	// Server sits in an infinite loop waiting for incoming connections
-	// from coordinator or clients, and for incoming messages from already
-	// connected coordinator or clients
-	//
-	// TODO: process connections and messages from other servers as well
-	// ...
+  // Server sits in an infinite loop waiting for incoming connections
+  // from coordinator or clients, and for incoming messages from already
+  // connected coordinator or clients
+  //
+  // TODO: process connections and messages from other servers as well
+  // ...
 
-	for (;;) {
-		rset = allset;
+  for (;;) {
+    rset = allset;
 
-		int num_ready_fds = select(maxfd + 1, &rset, NULL, NULL, NULL);
-		if (num_ready_fds < 0) {
-			log_perror("select");
-			return false;
-		}
+    int num_ready_fds = select(maxfd + 1, &rset, NULL, NULL, NULL);
+    if (num_ready_fds < 0) {
+      log_perror("select");
+      return false;
+    }
 
-		if (num_ready_fds <= 0) {
-			continue;
-		}
+    if (num_ready_fds <= 0) {
+      continue;
+    }
 
-		// Incoming connection from the coordinator
-		if (FD_ISSET(my_coord_fd, &rset)) {
-			int fd_idx = accept_connection(my_coord_fd, &coord_fd_in, 1);
-			if (fd_idx >= 0) {
-				FD_SET(coord_fd_in, &allset);
-				maxfd = max(maxfd, coord_fd_in);
-			}
-			assert(fd_idx == 0);
+    // Incoming connection from the coordinator
+    if (FD_ISSET(my_coord_fd, &rset)) {
+      int fd_idx = accept_connection(my_coord_fd, &coord_fd_in, 1);
+      if (fd_idx >= 0) {
+        FD_SET(coord_fd_in, &allset);
+        maxfd = max(maxfd, coord_fd_in);
+      }
+      assert(fd_idx == 0);
 
-			if (--num_ready_fds <= 0) {
-				continue;
-			}
-		}
+      if (--num_ready_fds <= 0) {
+        continue;
+      }
+    }
 
-		// Check for any messages from the coordinator
-		if ((coord_fd_in != -1) && FD_ISSET(coord_fd_in, &rset)) {
-			bool shutdown_requested = false;
-			if (!process_coordinator_message(coord_fd_in,
-							 &shutdown_requested)) {
-				// Received an invalid message, close the connection
-				log_error("sid %d: Closing coordinator connection\n", server_id);
-				FD_CLR(coord_fd_in, &allset);
-				close_safe(&(coord_fd_in));
-			} else if (shutdown_requested) {
-				return true;
-			}
+    // Check for any messages from the coordinator
+    if ((coord_fd_in != -1) && FD_ISSET(coord_fd_in, &rset)) {
+      bool shutdown_requested = false;
+      if (!process_coordinator_message(coord_fd_in, &shutdown_requested)) {
+        // Received an invalid message, close the connection
+        log_error("sid %d: Closing coordinator connection\n", server_id);
+        FD_CLR(coord_fd_in, &allset);
+        close_safe(&(coord_fd_in));
+      } else if (shutdown_requested) {
+        return true;
+      }
 
-			if (--num_ready_fds <= 0) {
-				continue;
-			}
-		}
+      if (--num_ready_fds <= 0) {
+        continue;
+      }
+    }
 
-		// Incoming connection from a client
-		if (FD_ISSET(my_clients_fd, &rset)) {
-			int fd_idx = accept_connection(my_clients_fd, client_fd_table, MAX_CLIENT_SESSIONS);
-			if (fd_idx >= 0) {
-				FD_SET(client_fd_table[fd_idx], &allset);
-				maxfd = max(maxfd, client_fd_table[fd_idx]);
-			}
+    // Incoming connection from a client
+    if (FD_ISSET(my_clients_fd, &rset)) {
+      int fd_idx = accept_connection(my_clients_fd, client_fd_table,
+                                     MAX_CLIENT_SESSIONS);
+      if (fd_idx >= 0) {
+        FD_SET(client_fd_table[fd_idx], &allset);
+        maxfd = max(maxfd, client_fd_table[fd_idx]);
+      }
 
-			if (--num_ready_fds <= 0) {
-				continue;
-			}
-		}
+      if (--num_ready_fds <= 0) {
+        continue;
+      }
+    }
 
-		// Check for any messages from connected clients
-		for (int i = 0; i < MAX_CLIENT_SESSIONS; i++) {
-			if ((client_fd_table[i] != -1) && FD_ISSET(client_fd_table[i], &rset)) {
-				process_client_message(client_fd_table[i]);
-				// Close connection after processing (semantics are "one connection per request")
-				FD_CLR(client_fd_table[i], &allset);
-				close_safe(&(client_fd_table[i]));
+    // Check for any messages from connected clients
+    for (int i = 0; i < MAX_CLIENT_SESSIONS; i++) {
+      if ((client_fd_table[i] != -1) && FD_ISSET(client_fd_table[i], &rset)) {
+        process_client_message(client_fd_table[i]);
+        // Close connection after processing (semantics are "one connection per
+        // request")
+        FD_CLR(client_fd_table[i], &allset);
+        close_safe(&(client_fd_table[i]));
 
-				if (--num_ready_fds <= 0) {
-					break;
-				}
-			}
-		}
-	}
+        if (--num_ready_fds <= 0) {
+          break;
+        }
+      }
+    }
+
+    // Incoming connection from a server
+    if (FD_ISSET(my_servers_fd, &rset)) {
+      int fd_idx = accept_connection(my_servers_fd, server_fd_table,
+                                     MAX_SERVER_SESSIONS);
+      if (fd_idx >= 0) {
+        FD_SET(server_fd_table[fd_idx], &allset);
+        maxfd = max(maxfd, server_fd_table[fd_idx]);
+      }
+
+      if (--num_ready_fds <= 0) {
+        continue;
+      }
+    }
+
+    // Check for any messages from connected servers
+    for (int i = 0; i < MAX_SERVER_SESSIONS; i++) {
+      if ((server_fd_table[i] != -1) && FD_ISSET(server_fd_table[i], &rset)) {
+        if (!process_server_message(server_fd_table[i])) {
+          // Received an invalid message, close the connection
+          log_error("sid %d: Closing server connection\n", i);
+          FD_CLR(server_fd_table[i], &allset);
+          close_safe(&(server_fd_table[i]));
+        }
+        if (--num_ready_fds <= 0) {
+          break;
+        }
+      }
+    }
+  }
 }
 
+int main(int argc, char **argv) {
+  signal(SIGPIPE, SIG_IGN);
 
-int main(int argc, char **argv)
-{
-	signal(SIGPIPE, SIG_IGN);
+  if (!parse_args(argc, argv)) {
+    usage(argv);
+    return 1;
+  }
 
-	if (!parse_args(argc, argv)) {
-		usage(argv);
-		return 1;
-	}
+  open_log(log_file_name);
 
-	open_log(log_file_name);
+  if (!init_server()) {
+    return 1;
+  }
 
-	if (!init_server()) {
-		return 1;
-	}
+  bool result = run_server_loop();
 
-	bool result = run_server_loop();
-
-	cleanup();
-	return result ? 0 : 1;
+  cleanup();
+  return result ? 0 : 1;
 }
